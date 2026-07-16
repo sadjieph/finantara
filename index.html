@@ -713,6 +713,9 @@
       <div class="section-title">Pengeluaran per Kategori</div>
       <div id="catBreakdown"></div>
 
+      <div class="section-title">Pengeluaran per Sumber Dana</div>
+      <div id="methodBreakdown"></div>
+
       <div class="section-title">
         Transaksi Terbaru
         <button class="link-btn" onclick="switchTab('transaksi')">Lihat semua</button>
@@ -873,6 +876,20 @@
     <div class="field">
       <label>Catatan (opsional)</label>
       <input type="text" id="inpNote" placeholder="mis. Belanja bulanan">
+    </div>
+
+    <div class="field">
+      <label>Sumber Dana</label>
+      <select id="inpMethod">
+        <option value="tunai">💵 Tunai</option>
+        <option value="transfer">🏦 Transfer Bank</option>
+        <option value="gopay">🟢 GoPay</option>
+        <option value="dana">🔵 DANA</option>
+        <option value="ovo">🟣 OVO</option>
+        <option value="shopeepay">🟠 ShopeePay</option>
+        <option value="kartu">💳 Kartu Debit/Kredit</option>
+        <option value="lainnya">✳️ Lainnya</option>
+      </select>
     </div>
 
     <div class="field">
@@ -1275,6 +1292,7 @@ function openSheet(fromScan){
     document.getElementById('btnSave').textContent = 'Simpan Transaksi';
     document.getElementById('scanFromSheet').style.display = '';
     document.getElementById('inpDate').value = new Date().toISOString().slice(0,10);
+    document.getElementById('inpMethod').value = 'tunai';
     document.getElementById('scanNotice').style.display = 'none';
   }
   renderCatGrid();
@@ -1310,6 +1328,7 @@ function openEditSheet(id){
   document.getElementById('btnIstri').classList.toggle('active', tx.person==='istri');
   document.getElementById('inpAmount').value = Number(tx.amount).toLocaleString('id-ID');
   document.getElementById('inpNote').value = tx.note || '';
+  document.getElementById('inpMethod').value = tx.method || 'tunai';
   document.getElementById('inpDate').value = tx.date;
   document.getElementById('scanNotice').style.display = 'none';
   document.getElementById('scanFromSheet').style.display = 'none';
@@ -1377,6 +1396,7 @@ document.getElementById('btnSave').addEventListener('click', async ()=>{
   }
   const date = document.getElementById('inpDate').value || new Date().toISOString().slice(0,10);
   const note = document.getElementById('inpNote').value.trim();
+  const method = document.getElementById('inpMethod').value;
 
   if(editingTxId){
     const patch = {
@@ -1385,7 +1405,8 @@ document.getElementById('btnSave').addEventListener('click', async ()=>{
       category: state.category,
       amount: amount,
       note: note,
-      date: date
+      date: date,
+      method: method
     };
     try{
       await fsUpdateTransaction(editingTxId, patch);
@@ -1406,6 +1427,7 @@ document.getElementById('btnSave').addEventListener('click', async ()=>{
     amount: amount,
     note: note,
     date: date,
+    method: method,
     createdAt: Date.now()
   };
   try{
@@ -2027,12 +2049,25 @@ function txIcon(t){
   return `<div class="tx-icon" style="background:${bg};">${c.em}</div>`;
 }
 
+const METHOD_LOOKUP = {
+  tunai:     {em:'💵', label:'Tunai'},
+  transfer:  {em:'🏦', label:'Transfer'},
+  gopay:     {em:'🟢', label:'GoPay'},
+  dana:      {em:'🔵', label:'DANA'},
+  ovo:       {em:'🟣', label:'OVO'},
+  shopeepay: {em:'🟠', label:'ShopeePay'},
+  kartu:     {em:'💳', label:'Kartu'},
+  lainnya:   {em:'✳️', label:'Lainnya'}
+};
+
 function txItemHTML(t){
   const c = CAT_LOOKUP[t.category] || {label:'Lainnya'};
   const personLabel = personName(t.person);
   const personColor = t.person==='suami' ? 'var(--suami)' : 'var(--istri)';
   const personBg = t.person==='suami' ? 'var(--suami-bg)' : 'var(--istri-bg)';
   const dateLabel = new Date(t.date).toLocaleDateString('id-ID', {day:'numeric', month:'short'});
+  const methodInfo = METHOD_LOOKUP[t.method] || null;
+  const methodLabel = methodInfo ? ` · ${methodInfo.em} ${methodInfo.label}` : '';
   return `
     <div class="tx-item">
       ${txIcon(t)}
@@ -2040,7 +2075,7 @@ function txItemHTML(t){
         <p class="tx-title">${t.note ? escapeHTML(t.note) : c.label}</p>
         <div class="tx-meta">
           <span class="badge" style="background:${personBg}; color:${personColor};">${personLabel}</span>
-          <span>${c.label} · ${dateLabel}</span>
+          <span>${c.label} · ${dateLabel}${methodLabel}</span>
         </div>
       </div>
       <div class="tx-amount ${t.type}">${t.type==='income'?'+':'-'} ${fmtShort(t.amount)}</div>
@@ -2084,6 +2119,7 @@ function render(){
   document.getElementById('istriOut').textContent = fmt(istriOut);
 
   renderCatBreakdown(txs, expense);
+  renderMethodBreakdown(txs, expense);
   renderRecent(txs);
   renderFullList();
 }
@@ -2106,6 +2142,45 @@ function renderCatBreakdown(txs, totalExpense){
       <div class="cat-item">
         <div class="cat-swatch" style="background:${color};"></div>
         <div class="cat-name">${c.label}</div>
+        <div class="cat-bar-track"><div class="cat-bar-fill" style="width:${pct}%; background:${color};"></div></div>
+        <div class="cat-amount">${fmtShort(amt)}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+const METHOD_COLORS = {
+  tunai:     '#8A8677',
+  transfer:  '#3E6C6A',
+  gopay:     '#00AA5B',
+  dana:      '#118EEA',
+  ovo:       '#4C2A86',
+  shopeepay: '#EE4D2D',
+  kartu:     '#B08D57',
+  lainnya:   '#A79C86'
+};
+
+function renderMethodBreakdown(txs, totalExpense){
+  const wrap = document.getElementById('methodBreakdown');
+  const expenseTx = txs.filter(t=>t.type==='expense');
+  if(expenseTx.length === 0){
+    wrap.innerHTML = `<div class="empty-state"><span class="emoji">💳</span><p>Belum ada pengeluaran tercatat.</p></div>`;
+    return;
+  }
+  const byMethod = {};
+  expenseTx.forEach(t=>{
+    const key = t.method || 'tunai';
+    byMethod[key] = (byMethod[key]||0) + t.amount;
+  });
+  const sorted = Object.entries(byMethod).sort((a,b)=>b[1]-a[1]);
+  wrap.innerHTML = sorted.map(([methodId, amt])=>{
+    const m = METHOD_LOOKUP[methodId] || {em:'✳️', label:methodId};
+    const pct = totalExpense ? (amt/totalExpense*100) : 0;
+    const color = METHOD_COLORS[methodId] || '#8A8677';
+    return `
+      <div class="cat-item">
+        <div class="cat-swatch" style="background:${color};"></div>
+        <div class="cat-name">${m.em} ${m.label}</div>
         <div class="cat-bar-track"><div class="cat-bar-fill" style="width:${pct}%; background:${color};"></div></div>
         <div class="cat-amount">${fmtShort(amt)}</div>
       </div>
